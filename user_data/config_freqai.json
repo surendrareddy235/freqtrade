@@ -115,7 +115,9 @@
         "drawdown_limit_pct": 5.0,
         "position_sizing_pct": 1.0,
         "daily_trade_cap": 10,
-        "balance_safety_buffer_factor": 1.5
+        "balance_safety_buffer_factor": 1.5,
+        "correlation_threshold": 0.85,
+        "min_balance_buffer": 1.5
     },
     "tier_classification": {
         "tier_1_threshold": 0.80,
