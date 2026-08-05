@@ -22,7 +22,7 @@
     "trailing_stop": false,
     "freqaimodel": "LightGBMClassifier",
     "freqai": {
-        "enabled": false,
+        "enabled": true,
         "purge_old_models": 2,
         "train_period_days": 45,
         "backtest_period_days": 7,
@@ -47,21 +47,29 @@
             "principal_component_analysis": false,
             "use_SVM_to_remove_outliers": true,
             "indicator_periods_candles": [
-                9,
-                14,
-                21,
-                50
+                14
             ],
             "plot_feature_importances": 0
         },
         "data_split_parameters": {
-            "test_size": 0.33,
-            "random_state": 42
+            "test_size": 0.15,
+            "shuffle": false
         },
-        "model_training_parameters": {}
+        "model_training_parameters": {
+            "objective": "binary",
+            "n_estimators": 500,
+            "learning_rate": 0.03,
+            "num_leaves": 31,
+            "max_depth": 5,
+            "min_data_in_leaf": 100,
+            "feature_fraction": 0.8,
+            "bagging_fraction": 0.8,
+            "bagging_freq": 1,
+            "n_jobs": -1
+        }
     },
     "exchange": {
-        "name": "binance",
+        "name": "okx",
         "key": "",
         "secret": "",
         "ccxt_config": {
@@ -69,11 +77,15 @@
         },
         "ccxt_async_config": {},
         "pair_whitelist": [
-            ".*/USDT"
-        ],
-        "pair_blacklist": [
             "BTC/USDT",
             "ETH/USDT",
+            "XRP/USDT",
+            "ADA/USDT",
+            "SOL/USDT",
+            "DOGE/USDT",
+            "LTC/USDT"
+        ],
+        "pair_blacklist": [
             "USDC/USDT",
             "DAI/USDT",
             "BUSD/USDT"
@@ -96,28 +108,7 @@
     },
     "pairlists": [
         {
-            "method": "VolumePairList",
-            "number_assets": 15,
-            "sort_key": "quoteVolume",
-            "refresh_period": 1800
-        },
-        {
-            "method": "AgeFilter",
-            "min_days_listed": 30
-        },
-        {
-            "method": "SpreadFilter",
-            "max_spread_ratio": 0.005
-        },
-        {
-            "method": "VolatilityFilter",
-            "lookback_days": 10,
-            "min_volatility": 0.01,
-            "max_volatility": 0.10,
-            "refresh_period": 1440
-        },
-        {
-            "method": "ShuffleFilter"
+            "method": "StaticPairList"
         }
     ],
     "risk_manager": {
