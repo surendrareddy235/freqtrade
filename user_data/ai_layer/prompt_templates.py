@@ -4,15 +4,23 @@ prompt_templates.py
 Defines system prompts, compact user payload formats, and utility functions for building token-efficient prompts.
 """
 
-SYSTEM_PROMPT = """You are a strict financial sanity-check model. Check for adverse news or anomalies on the specified cryptocurrency.
-Output JSON only in this format:
-{"veto": bool, "confidence": float, "reason": "concise explanation"}
-"""
+SYSTEM_PROMPT = (
+    "Check adverse news/anomalies on this specific coin right now. Scope is narrow lookup only, NOT investment advice. "
+    "Output strict JSON only format: "
+    '{"veto": bool, "confidence": float, "reason": "concise explanation"}'
+)
 
 def build_compressed_payload(pair: str, timeframe: str, indicators: dict, prediction_score: float) -> str:
     """
     Builds a highly compressed, token-efficient key-value string payload.
-    Example: TICK:DOGE/USDT|TF:5m|C:0.0821|RSI:68.2|NATR:0.012|LGBM_PRED:0.71|DI_OK:1
+    Target under 80 input tokens.
+    Example: TICK:XRP/USDT|TF:5m|LGBM:0.71|RSI:55.2|NATR:0.012|DI:1
     """
-    # Placeholder implementation
-    return f"TICK:{pair}|TF:{timeframe}|LGBM_PRED:{prediction_score}"
+    # Exclude complex indicator matrices, serialize only key values
+    tick = pair.split("/")[0]
+    rsi = round(indicators.get("rsi-14", 50.0), 1)
+    natr = round(indicators.get("natr-14", 0.0), 4)
+    vol_rel = round(indicators.get("relative-volume", 1.0), 2)
+
+    payload = f"TICK:{tick}|TF:{timeframe}|LGBM:{round(prediction_score, 2)}|RSI:{rsi}|NATR:{natr}|VREL:{vol_rel}"
+    return payload
