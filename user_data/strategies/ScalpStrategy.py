@@ -16,8 +16,9 @@ import talib.abstract as ta
 from freqtrade.strategy import IStrategy
 from freqtrade.persistence import Trade
 
-# Import our custom RiskManager
+# Import our custom RiskManager and DecisionLogger
 from user_data.ai_layer.risk_manager import RiskManager
+from user_data.ai_layer.decision_logger import DecisionLogger
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ class ScalpStrategy(IStrategy):
     def __init__(self, config: dict) -> None:
         super().__init__(config)
         self.risk_manager = RiskManager(config)
+        self.decision_logger = DecisionLogger(config.get("db_url", "tradesv3.dryrun.sqlite"))
+        self.close_returns_cache = {}
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
@@ -204,7 +207,8 @@ class ScalpStrategy(IStrategy):
     def bot_loop_start(self, current_time: datetime, **kwargs) -> None:
         """
         Refreshes cached risk state at each loop step before entering 'confirm_trade_entry' callbacks.
-        Calculates daily trade counts, open trade counts, and daily drawdown percentage.
+        Calculates daily trade counts, open trade counts, and daily drawdown percentage relative to start-of-day equity.
+        Precomputes close returns for whitelisted pairs and open positions to avoid heavy computations in confirm_trade_entry.
         """
         try:
             # Query all trades (both open and closed)
@@ -213,41 +217,89 @@ class ScalpStrategy(IStrategy):
             # 1. Active/Open trade count
             self.current_open_trades_count = len([t for t in all_trades if t.is_open])
 
-            # 2. Trades taken today (UTC timezone)
-            today_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            daily_trades = [
-                t for t in all_trades
-                if t.open_date_utc >= today_start
-            ]
+            # 2. Trades taken or closed today (UTC timezone)
+            today_start = current_time.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            daily_trades = []
+            for t in all_trades:
+                if t.open_date_utc >= today_start:
+                    daily_trades.append(t)
+                elif t.close_date_utc is not None and t.close_date_utc >= today_start:
+                    daily_trades.append(t)
             self.daily_trades_count = len(daily_trades)
 
-            # 3. Drawdown calculator for today's closed/open trades
+            # 3. Drawdown calculator relative to start-of-day equity
             # Sum of closed profit/loss today
             daily_closed_profit = sum([t.close_profit_abs for t in daily_trades if not t.is_open and t.close_profit_abs is not None])
 
-            # Sum of unrealized profit/loss today
-            daily_unrealized_profit = sum([t.realized_profit for t in daily_trades if t.is_open and t.realized_profit is not None])
+            # Sum of unrealized profit/loss today for trades opened today
+            daily_unrealized_profit = 0.0
+
+            # Total unrealized profit of all currently open trades (used for current equity calculation)
+            total_unrealized_profit = 0.0
+
+            for t in all_trades:
+                if t.is_open:
+                    df_open, _ = self.dp.get_analyzed_dataframe(t.pair, self.timeframe)
+                    if df_open is not None and not df_open.empty:
+                        current_rate = df_open.iloc[-1]["close"]
+                        unrealized_profit_abs = t.calc_profit_ratio(current_rate) * t.stake_amount
+                        total_unrealized_profit += unrealized_profit_abs
+                        if t.open_date_utc >= today_start:
+                            daily_unrealized_profit += unrealized_profit_abs
 
             total_profit_today = daily_closed_profit + daily_unrealized_profit
 
-            # Drawdown percentage relative to starting dry-run wallet or current wallet balance
-            wallet_balance = self.config.get("dry_run_wallet", 1000.0)
-            if wallet_balance > 0:
-                # If negative today, that is drawdown
-                self.daily_drawdown_pct = max(0.0, -total_profit_today / wallet_balance)
+            # Get free stake balance
+            free_balance = None
+            if hasattr(self, "wallets") and self.wallets is not None:
+                try:
+                    free_balance = self.wallets.get_free(self.config.get("stake_currency", "USDT"))
+                except Exception:
+                    pass
+            if free_balance is None:
+                free_balance = self.config.get("dry_run_wallet", 1000.0)
+
+            # Calculate total open trades cost (initial stake amount)
+            total_open_trades_cost = sum([t.stake_amount for t in all_trades if t.is_open])
+
+            # Current portfolio equity
+            current_equity = free_balance + total_open_trades_cost + total_unrealized_profit
+
+            # Start of day equity
+            start_of_day_equity = current_equity - total_profit_today
+
+            # Calculate daily drawdown percentage relative to start-of-day equity
+            if start_of_day_equity > 0:
+                self.daily_drawdown_pct = max(0.0, -total_profit_today / start_of_day_equity)
             else:
                 self.daily_drawdown_pct = 0.0
 
             logger.info(
                 f"[RiskState] Current Open Trades: {self.current_open_trades_count}, "
                 f"Daily Trades Count: {self.daily_trades_count}, "
-                f"Daily Drawdown: {self.daily_drawdown_pct:.2%}"
+                f"Daily Drawdown: {self.daily_drawdown_pct:.2%}, "
+                f"Start-of-Day Equity: {start_of_day_equity:.2f}, "
+                f"Current Equity: {current_equity:.2f}"
             )
+
+            # 4. Precompute and cache the last 30 candles of close returns
+            self.close_returns_cache = {}
+            open_pairs = [t.pair for t in all_trades if t.is_open]
+            whitelist = self.dp.current_whitelist() if self.dp else []
+            all_pairs = list(set(whitelist + open_pairs))
+
+            for pair in all_pairs:
+                df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                if df is not None and not df.empty:
+                    close_returns = df["close"].pct_change()
+                    self.close_returns_cache[pair] = close_returns.tail(30)
+
         except Exception as e:
             logger.error(f"Error in bot_loop_start risk state computation: {e}", exc_info=True)
             self.current_open_trades_count = 0
             self.daily_trades_count = 0
             self.daily_drawdown_pct = 0.0
+            self.close_returns_cache = {}
 
     def confirm_trade_entry(
         self,
@@ -263,46 +315,43 @@ class ScalpStrategy(IStrategy):
     ) -> bool:
         """
         Runs the final veto check using RiskManager rules. Bypasses balance checks in dry-run mode.
-        Performs exact rolling returns correlation check against currently open trades.
+        Performs exact rolling returns correlation check against currently open trades using cached data.
         """
         try:
             is_dry_run = self.config.get("dry_run", True)
             max_open_trades = self.config.get("max_open_trades", 1)
 
-            # Calculate correlation check
+            # 1. Fetch candidate returns
+            candidate_returns = getattr(self, "close_returns_cache", {}).get(pair)
+            if candidate_returns is None:
+                # Fallback to fetch on-demand if missing in cache
+                df, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
+                if df is not None and not df.empty:
+                    candidate_returns = df["close"].pct_change().tail(30)
+
+            # 2. Calculate correlation check
             is_correlated = False
             all_trades = Trade.get_trades_proxy()
             open_trades = [t for t in all_trades if t.is_open]
 
-            if open_trades:
-                # Retrieve analyzed dataframe of candidate pair
-                df_candidate, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
-                if df_candidate is not None and len(df_candidate) >= 30:
-                    # Get returns of candidate pair close returns
-                    candidate_returns = df_candidate["close"].pct_change()
-
-                    for ot in open_trades:
-                        if ot.pair == pair:
-                            continue
+            if open_trades and candidate_returns is not None:
+                for ot in open_trades:
+                    if ot.pair == pair:
+                        continue
+                    open_returns = getattr(self, "close_returns_cache", {}).get(ot.pair)
+                    if open_returns is None:
                         df_open, _ = self.dp.get_analyzed_dataframe(ot.pair, self.timeframe)
-                        if df_open is not None and len(df_open) >= 30:
-                            # Align data on dates to calculate correlation
-                            open_returns = df_open["close"].pct_change()
-                            merged_returns = pd.DataFrame({
-                                "candidate": candidate_returns,
-                                "open": open_returns
-                            }).dropna()
+                        if df_open is not None and not df_open.empty:
+                            open_returns = df_open["close"].pct_change().tail(30)
 
-                            # Keep last 30 candles lookback window
-                            if len(merged_returns) >= 10:
-                                last_30 = merged_returns.tail(30)
-                                correlation_value = last_30["candidate"].corr(last_30["open"])
-                                logger.info(f"[Risk Correlation] {pair} vs {ot.pair} correlation is {correlation_value:.2f}")
-                                if correlation_value > self.risk_manager.correlation_threshold:
-                                    is_correlated = True
-                                    break
+                    if open_returns is not None:
+                        correlation_value = self.risk_manager.calculate_correlation(candidate_returns, open_returns)
+                        logger.info(f"[Risk Correlation] {pair} vs {ot.pair} correlation is {correlation_value:.2f}")
+                        if correlation_value > self.risk_manager.correlation_threshold:
+                            is_correlated = True
+                            break
 
-            # Fetch minimum order notional limit for the exchange
+            # 3. Fetch minimum order notional limit for the exchange
             min_notional = 10.0  # Safe robust baseline default for USDT spot markets
             try:
                 if hasattr(self.dp, "market") and self.dp.market(pair) is not None:
@@ -311,27 +360,55 @@ class ScalpStrategy(IStrategy):
             except Exception:
                 pass
 
-            # Wallet available balance
-            available_balance = self.config.get("dry_run_wallet", 1000.0)
-            try:
-                if not is_dry_run and hasattr(self, "wallets"):
+            # 4. Wallet available balance
+            available_balance = None
+            if hasattr(self, "wallets") and self.wallets is not None:
+                try:
                     available_balance = self.wallets.get_free(self.config.get("stake_currency", "USDT"))
-            except Exception:
-                pass
+                except Exception:
+                    pass
+            if available_balance is None:
+                available_balance = self.config.get("dry_run_wallet", 1000.0)
 
-            # Execute all RiskManager checks sequentially
+            # 5. Proposed stake amount
+            proposed_stake = amount * rate
+
+            # 6. Execute all RiskManager checks sequentially
             passed, reason = self.risk_manager.check_all_rules(
                 pair=pair,
                 current_open_trades=self.current_open_trades_count,
                 daily_trades=self.daily_trades_count,
                 daily_drawdown_pct=self.daily_drawdown_pct,
                 max_open_trades=max_open_trades,
+                proposed_stake=proposed_stake,
                 available_balance=available_balance,
                 min_notional=min_notional,
                 is_correlated=is_correlated,
                 is_dry_run=is_dry_run,
                 llm_veto=False
             )
+
+            # 7. Record structured decision in SQLite database
+            decision_data = {
+                "trade_id": None,
+                "pair": pair,
+                "timeframe": self.timeframe,
+                "tier": 1,
+                "model_confidence": 1.0,
+                "di_ok": 1,
+                "llm_invoked": 0,
+                "llm_provider": "none",
+                "llm_veto": 0,
+                "llm_confidence": 0.0,
+                "llm_reason": "none",
+                "risk_checks_passed": 1 if passed else 0,
+                "block_reason": reason if not passed else None,
+                "outcome": "approved" if passed else "rejected"
+            }
+            try:
+                self.decision_logger.log_decision(decision_data)
+            except Exception as db_err:
+                logger.error(f"Failed to log decision to database: {db_err}")
 
             if not passed:
                 logger.warning(f"[RiskVeto] Trade blocked for {pair}. Reason: {reason}")
