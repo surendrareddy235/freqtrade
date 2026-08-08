@@ -19,13 +19,16 @@ from freqtrade.persistence import Trade
 # Import our custom RiskManager and DecisionLogger
 from user_data.ai_layer.risk_manager import RiskManager
 from user_data.ai_layer.decision_logger import DecisionLogger
+from user_data.ai_layer.llm_client import LLMClient
+from user_data.ai_layer.state_cache import StateCache
+from user_data.ai_layer.prompt_templates import SYSTEM_PROMPT, build_compressed_payload
 
 logger = logging.getLogger(__name__)
 
 class ScalpStrategy(IStrategy):
     """
     ScalpStrategy - Custom IStrategy class for AI-Driven Crypto Scalping Bot.
-    This strategy represents the base setup for Phase 3.
+    This strategy represents the base setup for Phase 5.
     """
 
     INTERFACE_VERSION = 3
@@ -60,12 +63,19 @@ class ScalpStrategy(IStrategy):
         super().__init__(config)
         self.risk_manager = RiskManager(config)
         self.decision_logger = DecisionLogger(config.get("db_url", "tradesv3.dryrun.sqlite"))
+        self.llm_client = LLMClient(config)
+        self.state_cache = StateCache()
         self.close_returns_cache = {}
+
+        # In-memory stores for runtime decision data
+        self.latest_candidate_data = {}
+        self.last_processed_timestamp = {}
+        self.linked_trade_ids = set()
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
         Populate base indicators that feed into FreqAI feature pipeline.
-        In Phase 3, this starts the FreqAI pipeline. Do not put feature engineering here
+        In Phase 5, this starts the FreqAI pipeline. Do not put feature engineering here
         to avoid look-ahead bias as per §B.3.
         """
         self.freqai_info = self.config["freqai"]
@@ -185,19 +195,74 @@ class ScalpStrategy(IStrategy):
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
-        Phase 2 entry logic: use model predictions for entry.
+        Phase 5 entry logic: uses model predictions for entry.
         Buy if the model predicts the target is 1 (upward move >= 0.7% expected)
         and the data kitchen do_predict flag is true (not outlier, no NaNs).
+        Also calculates deterministic anomaly thresholds and high-ATR regimes on the dataframe.
         """
-        dataframe.loc[
-            (dataframe["&target"] == 1) & (dataframe["do_predict"] == 1),
-            ["enter_long", "enter_tag"]
-        ] = (1, "long_scalp")
+        epsilon = 1e-8
+
+        # --- 1. Ensure NATR is calculated & setup rolling NATR z-score ---
+        natr_col = "%natr-14"
+        if natr_col not in dataframe.columns:
+            dataframe[natr_col] = ta.NATR(dataframe, timeperiod=14)
+
+        lookback = self.config.get("tier_classification", {}).get("anomaly_lookback_candles", 100)
+        rolling_mean = dataframe[natr_col].rolling(lookback, min_periods=1).mean()
+        rolling_std = dataframe[natr_col].rolling(lookback, min_periods=1).std().replace(0, epsilon)
+        dataframe["natr_zscore"] = (dataframe[natr_col] - rolling_mean) / rolling_std
+
+        # --- 2. Calculate High-ATR Threshold (80th percentile) ---
+        pct = self.config.get("tier_classification", {}).get("high_atr_percentile", 0.80)
+        dataframe["natr_pct_80"] = dataframe[natr_col].rolling(lookback, min_periods=1).quantile(pct)
+
+        # --- 3. Compute Vectorized Flags ---
+        vol_high = self.config.get("tier_classification", {}).get("volume_anomaly_high", 2.0)
+        vol_low = self.config.get("tier_classification", {}).get("volume_anomaly_low", 0.5)
+
+        # Re-calc relative-volume if missing
+        if "%relative-volume" not in dataframe.columns:
+            rolling_vol_mean = dataframe["volume"].rolling(14, min_periods=1).mean().replace(0, epsilon)
+            dataframe["%relative-volume"] = dataframe["volume"] / rolling_vol_mean
+
+        dataframe["volume_anomaly"] = (dataframe["%relative-volume"] >= vol_high) | (dataframe["%relative-volume"] <= vol_low)
+
+        volt_z = self.config.get("tier_classification", {}).get("volatility_anomaly_zscore", 2.0)
+        dataframe["volatility_anomaly"] = dataframe["natr_zscore"].abs() >= volt_z
+
+        dataframe["high_atr"] = dataframe[natr_col] >= dataframe["natr_pct_80"]
+
+        # Default setup
+        dataframe["enter_long"] = 0
+        dataframe["enter_tag"] = ""
+
+        # Safely find classifier prediction confidence / positive class probability
+        prob_col = None
+        for col in ["1", 1, "1.0"]:
+            if col in dataframe.columns:
+                prob_col = col
+                break
+
+        # Generate entry signals if predicted class is 1, and do_predict == 1
+        # If probability column exists, we enforce our floor of confidence >= 0.55
+        if prob_col is not None:
+            dataframe.loc[
+                (dataframe["&target"] == 1) &
+                (dataframe["do_predict"] == 1) &
+                (dataframe[prob_col] >= 0.55),
+                ["enter_long", "enter_tag"]
+            ] = (1, "long_scalp")
+        else:
+            dataframe.loc[
+                (dataframe["&target"] == 1) & (dataframe["do_predict"] == 1),
+                ["enter_long", "enter_tag"]
+            ] = (1, "long_scalp")
+
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
-        Phase 2 exit logic: exits are ROI/stoploss driven natively.
+        Phase 5 exit logic: exits are ROI/stoploss driven natively.
         No custom exit signal.
         """
         dataframe["exit_long"] = 0
@@ -209,6 +274,8 @@ class ScalpStrategy(IStrategy):
         Refreshes cached risk state at each loop step before entering 'confirm_trade_entry' callbacks.
         Calculates daily trade counts, open trade counts, and daily drawdown percentage relative to start-of-day equity.
         Precomputes close returns for whitelisted pairs and open positions to avoid heavy computations in confirm_trade_entry.
+        Runs the Tier 1/2/3 LLM Context Agent pipelines for active trade candidates.
+        Links any active trade entries with NULL trade_id to newly created trade records in the SQLite database.
         """
         try:
             # Query all trades (both open and closed)
@@ -282,6 +349,13 @@ class ScalpStrategy(IStrategy):
                 f"Current Equity: {current_equity:.2f}"
             )
 
+            # Link any newly created trades back to SQLite decisions logged with trade_id NULL
+            for t in all_trades:
+                if t.id not in self.linked_trade_ids:
+                    success = self.decision_logger.link_trade_id(t.pair, t.id)
+                    if success:
+                        self.linked_trade_ids.add(t.id)
+
             # 4. Precompute and cache the last 30 candles of close returns
             self.close_returns_cache = {}
             open_pairs = [t.pair for t in all_trades if t.is_open]
@@ -294,12 +368,116 @@ class ScalpStrategy(IStrategy):
                     close_returns = df["close"].pct_change()
                     self.close_returns_cache[pair] = close_returns.tail(30)
 
+                    # --- Run the Phase 5 LLM Context Agent Pipeline on active entry candidates ---
+                    # Only evaluate for candidates if we are running in dry-run/live and pair is in whitelist
+                    if pair in whitelist:
+                        latest_candle = df.iloc[-1]
+                        candle_date = latest_candle["date"]
+
+                        # Check if this candle represents a new close we haven't processed yet
+                        if self.last_processed_timestamp.get(pair) != candle_date:
+                            self.last_processed_timestamp[pair] = candle_date
+
+                            # Determine if latest candle has a buy signal
+                            if latest_candle.get("enter_long", 0) == 1:
+                                # Fetch classifier confidence
+                                prob_col = None
+                                for col in ["1", 1, "1.0"]:
+                                    if col in df.columns:
+                                        prob_col = col
+                                        break
+
+                                confidence = float(latest_candle[prob_col]) if prob_col is not None else 1.0
+                                do_predict = int(latest_candle.get("do_predict", 1))
+                                di_val = float(latest_candle.get("di_values", 0.0)) if "di_values" in df.columns else 0.0
+
+                                # Anomaly & Regimes
+                                vol_anom = bool(latest_candle.get("volume_anomaly", False))
+                                volt_anom = bool(latest_candle.get("volatility_anomaly", False))
+                                high_atr = bool(latest_candle.get("high_atr", False))
+
+                                # Read tier thresholds from config
+                                tier_1_th = self.config.get("tier_classification", {}).get("tier_1_threshold", 0.80)
+                                tier_2_th = self.config.get("tier_classification", {}).get("tier_2_threshold", 0.60)
+                                tier_3_th = self.config.get("tier_classification", {}).get("tier_3_threshold", 0.55)
+
+                                tier = 1
+                                llm_invoked = False
+
+                                # Classify tier
+                                if confidence >= tier_1_th and do_predict == 1:
+                                    tier = 1
+                                    llm_invoked = False
+                                elif (confidence >= tier_2_th and confidence < tier_1_th and do_predict == 1) or ((vol_anom or volt_anom) and do_predict == 1):
+                                    tier = 2
+                                    llm_invoked = True
+                                elif (confidence >= tier_3_th and confidence < tier_2_th and do_predict == 1) and high_atr:
+                                    tier = 3
+                                    llm_invoked = True
+
+                                logger.info(f"[TierClassification] Pair {pair} candidate Tier {tier} (confidence={confidence:.2f}, do_predict={do_predict})")
+
+                                llm_veto = False
+                                llm_confidence_val = 0.0
+                                llm_reason = "none"
+                                llm_provider = "none"
+
+                                if llm_invoked and tier in [2, 3]:
+                                    # Form indicators dictionary
+                                    indicators = {
+                                        "close": float(latest_candle["close"]),
+                                        "rsi-14": float(latest_candle.get("%rsi-14", 50.0)),
+                                        "natr-14": float(latest_candle.get("%natr-14", 0.0)),
+                                        "relative-volume": float(latest_candle.get("%relative-volume", 1.0)),
+                                        "volatility_state": float(latest_candle.get("natr_zscore", 0.0)),
+                                        "model_prediction": 1,
+                                        "model_confidence": confidence,
+                                        "do_predict": do_predict,
+                                        "di_value": di_val,
+                                        "volume_anomaly": vol_anom,
+                                        "volatility_anomaly": volt_anom,
+                                        "high_atr": high_atr
+                                    }
+
+                                    # Generate and check cache
+                                    state_hash = self.state_cache.get_hash(pair, self.timeframe, indicators)
+                                    cached_res = self.state_cache.lookup(pair, state_hash)
+
+                                    if cached_res is not None:
+                                        llm_veto = cached_res["veto"]
+                                        llm_confidence_val = cached_res["confidence"]
+                                        llm_reason = cached_res["reason"]
+                                        llm_provider = cached_res.get("provider", "cache")
+                                        logger.info(f"[StateCache] HIT for {pair}. Reusing cached verdict: veto={llm_veto}, reason={llm_reason}")
+                                    else:
+                                        # Query LLM Client with primary-fallback flow
+                                        user_payload = build_compressed_payload(pair, self.timeframe, indicators, confidence)
+                                        logger.info(f"[LLM] Querying Client for {pair}: {user_payload}")
+
+                                        llm_res = self.llm_client.query_model(user_payload, SYSTEM_PROMPT, pair)
+                                        llm_veto = llm_res["veto"]
+                                        llm_confidence_val = llm_res["confidence"]
+                                        llm_reason = llm_res["reason"]
+                                        llm_provider = llm_res["provider"]
+
+                                        # Cache results
+                                        self.state_cache.update(pair, state_hash, llm_res)
+
+                                # Save decision metadata to retrieve during confirm_trade_entry
+                                self.latest_candidate_data[pair] = {
+                                    "timestamp": candle_date,
+                                    "tier": tier,
+                                    "model_confidence": confidence,
+                                    "di_ok": do_predict,
+                                    "llm_invoked": 1 if llm_invoked else 0,
+                                    "llm_provider": llm_provider,
+                                    "llm_veto": 1 if llm_veto else 0,
+                                    "llm_confidence": llm_confidence_val,
+                                    "llm_reason": llm_reason
+                                }
+
         except Exception as e:
-            logger.error(f"Error in bot_loop_start risk state computation: {e}", exc_info=True)
-            self.current_open_trades_count = 0
-            self.daily_trades_count = 0
-            self.daily_drawdown_pct = 0.0
-            self.close_returns_cache = {}
+            logger.error(f"Error in bot_loop_start risk state/LLM computation: {e}", exc_info=True)
 
     def confirm_trade_entry(
         self,
@@ -316,10 +494,34 @@ class ScalpStrategy(IStrategy):
         """
         Runs the final veto check using RiskManager rules. Bypasses balance checks in dry-run mode.
         Performs exact rolling returns correlation check against currently open trades using cached data.
+        Bypasses LLM veto block because Phase 5 is LOG-ONLY, but still writes all metrics to custom SQLite log.
         """
         try:
             is_dry_run = self.config.get("dry_run", True)
             max_open_trades = self.config.get("max_open_trades", 1)
+
+            # Retrieve pre-computed candidate data if available
+            candidate = getattr(self, "latest_candidate_data", {}).get(pair)
+
+            # Default fallbacks
+            tier = 1
+            model_confidence = 1.0
+            di_ok = 1
+            llm_invoked = 0
+            llm_provider = "none"
+            llm_veto = False
+            llm_confidence_val = 0.0
+            llm_reason = "none"
+
+            if candidate is not None:
+                tier = candidate["tier"]
+                model_confidence = candidate["model_confidence"]
+                di_ok = candidate["di_ok"]
+                llm_invoked = candidate["llm_invoked"]
+                llm_provider = candidate["llm_provider"]
+                llm_veto = bool(candidate["llm_veto"])
+                llm_confidence_val = candidate["llm_confidence"]
+                llm_reason = candidate["llm_reason"]
 
             # 1. Fetch candidate returns
             candidate_returns = getattr(self, "close_returns_cache", {}).get(pair)
@@ -374,6 +576,9 @@ class ScalpStrategy(IStrategy):
             proposed_stake = amount * rate
 
             # 6. Execute all RiskManager checks sequentially
+            # IMPORTANT: In Phase 5, the LLM veto check is strictly LOG-ONLY.
+            # We enforce llm_veto=False so that the veto is evaluated and logged,
+            # but does NOT block actual trade entries.
             passed, reason = self.risk_manager.check_all_rules(
                 pair=pair,
                 current_open_trades=self.current_open_trades_count,
@@ -385,7 +590,7 @@ class ScalpStrategy(IStrategy):
                 min_notional=min_notional,
                 is_correlated=is_correlated,
                 is_dry_run=is_dry_run,
-                llm_veto=False
+                llm_veto=False  # Forced to False for LOG-ONLY Phase 5 behavior
             )
 
             # 7. Record structured decision in SQLite database
@@ -393,14 +598,14 @@ class ScalpStrategy(IStrategy):
                 "trade_id": None,
                 "pair": pair,
                 "timeframe": self.timeframe,
-                "tier": 1,
-                "model_confidence": 1.0,
-                "di_ok": 1,
-                "llm_invoked": 0,
-                "llm_provider": "none",
-                "llm_veto": 0,
-                "llm_confidence": 0.0,
-                "llm_reason": "none",
+                "tier": tier,
+                "model_confidence": model_confidence,
+                "di_ok": di_ok,
+                "llm_invoked": llm_invoked,
+                "llm_provider": llm_provider,
+                "llm_veto": 1 if llm_veto else 0,
+                "llm_confidence": llm_confidence_val,
+                "llm_reason": llm_reason,
                 "risk_checks_passed": 1 if passed else 0,
                 "block_reason": reason if not passed else None,
                 "outcome": "approved" if passed else "rejected"
