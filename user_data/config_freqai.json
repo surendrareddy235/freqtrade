@@ -69,7 +69,7 @@
         }
     },
     "exchange": {
-        "name": "okx",
+        "name": "binance",
         "key": "",
         "secret": "",
         "ccxt_config": {
@@ -77,8 +77,6 @@
         },
         "ccxt_async_config": {},
         "pair_whitelist": [
-            "BTC/USDT",
-            "ETH/USDT",
             "XRP/USDT",
             "ADA/USDT",
             "SOL/USDT",
