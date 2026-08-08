@@ -576,9 +576,7 @@ class ScalpStrategy(IStrategy):
             proposed_stake = amount * rate
 
             # 6. Execute all RiskManager checks sequentially
-            # IMPORTANT: In Phase 5, the LLM veto check is strictly LOG-ONLY.
-            # We enforce llm_veto=False so that the veto is evaluated and logged,
-            # but does NOT block actual trade entries.
+            # In Phase 6, the LLM veto is fully active and blocks trades if veto is True.
             passed, reason = self.risk_manager.check_all_rules(
                 pair=pair,
                 current_open_trades=self.current_open_trades_count,
@@ -590,7 +588,7 @@ class ScalpStrategy(IStrategy):
                 min_notional=min_notional,
                 is_correlated=is_correlated,
                 is_dry_run=is_dry_run,
-                llm_veto=False  # Forced to False for LOG-ONLY Phase 5 behavior
+                llm_veto=llm_veto
             )
 
             # 7. Record structured decision in SQLite database
