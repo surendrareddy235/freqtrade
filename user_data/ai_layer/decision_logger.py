@@ -102,3 +102,38 @@ class DecisionLogger:
             logger.info(f"Successfully logged AI/Risk decision for {decision_data.get('pair')}")
         except Exception as e:
             logger.error(f"Failed to insert decision record into ai_decisions: {e}")
+
+    def link_trade_id(self, pair: str, trade_id: int) -> bool:
+        """
+        Looks for the latest logged approved decision for a pair with no trade_id,
+        and links it to the newly created Freqtrade trade_id if not already linked.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Check if this trade_id is already linked
+            cursor.execute("SELECT id FROM ai_decisions WHERE trade_id = ?", (trade_id,))
+            if cursor.fetchone():
+                conn.close()
+                return True  # Already linked
+
+            # Find the most recent record for this pair with trade_id NULL and outcome 'approved'
+            cursor.execute("""
+                SELECT id FROM ai_decisions
+                WHERE pair = ? AND trade_id IS NULL AND outcome = 'approved'
+                ORDER BY timestamp DESC LIMIT 1
+            """, (pair,))
+            row = cursor.fetchone()
+            if row:
+                decision_id = row[0]
+                cursor.execute("""
+                    UPDATE ai_decisions SET trade_id = ? WHERE id = ?
+                """, (trade_id, decision_id))
+                conn.commit()
+                logger.info(f"Successfully linked trade_id {trade_id} to ai_decisions row {decision_id}")
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to link trade_id in SQLite: {e}")
+            return False
