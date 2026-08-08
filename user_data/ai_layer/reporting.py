@@ -10,113 +10,222 @@ import sqlite3
 import pandas as pd
 from tabulate import tabulate
 import logging
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai_reporting")
 
+def parse_last_days(last_str: str) -> int:
+    """Parses a duration string like '7days' or '14days' into integer of days."""
+    if not last_str:
+        return None
+    cleaned = last_str.lower().strip()
+    if cleaned.endswith("days"):
+        num_str = cleaned[:-4]
+    elif cleaned.endswith("day"):
+        num_str = cleaned[:-3]
+    else:
+        num_str = cleaned
+    try:
+        return int(num_str)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid timeframe format: '{last_str}'. Expected format like '7days', '14days', etc."
+        )
+
 def main():
     parser = argparse.ArgumentParser(description="Weekly AI Decisions Review & Calibration Report")
-    parser.add_argument("--db-path", type=str, default="tradesv3.dryrun.sqlite", help="Path to SQLite database")
-    parser.add_argument("--last", type=str, default="7days", help="Timeframe of report (e.g., 7days, 14days)")
+    parser.add_argument("--db-path", type=str, default="user_data/tradesv3.dryrun.sqlite", help="Path to SQLite database")
+    parser.add_argument("--last", type=parse_last_days, default=None, help="Timeframe of report (e.g., 7days, 14days)")
     parser.add_argument("--output", type=str, default="console", choices=["console", "csv"], help="Output format")
 
     args = parser.parse_args()
-    db_path = args.db_path
 
-    if not os.path.exists(db_path):
-        # Fallback to check default paths
-        if os.path.exists("user_data/tradesv3.dryrun.sqlite"):
-            db_path = "user_data/tradesv3.dryrun.sqlite"
-        elif os.path.exists("user_data/tradesv3.sqlite"):
-            db_path = "user_data/tradesv3.sqlite"
+    # Robust DB path lookup
+    db_path = None
+    db_candidates = [
+        args.db_path,
+        "tradesv3.dryrun.sqlite",
+        "user_data/tradesv3.dryrun.sqlite",
+        "tradesv3.sqlite",
+        "user_data/tradesv3.sqlite",
+        os.path.join(os.path.dirname(__file__), "..", "..", "user_data", "tradesv3.dryrun.sqlite"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "tradesv3.dryrun.sqlite"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "user_data", "tradesv3.sqlite"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "tradesv3.sqlite"),
+    ]
+
+    for candidate in db_candidates:
+        if candidate and os.path.exists(candidate):
+            db_path = candidate
+            break
+
+    if not db_path:
+        logger.error(f"Database file not found. Checked candidates: {db_candidates}. Cannot generate report.")
+        return
 
     logger.info(f"Generating report using database: {db_path}...")
-
-    if not os.path.exists(db_path):
-        logger.error(f"Database file not found at {args.db_path} or fallbacks. Cannot generate report.")
-        return
 
     try:
         conn = sqlite3.connect(db_path)
 
-        # We join on the 'trade_id' or 'pair' as fallback
-        query = """
-            SELECT
-                d.id as decision_id,
-                d.pair,
-                d.timeframe,
-                d.tier,
-                d.model_confidence,
-                d.llm_invoked,
-                d.llm_provider,
-                d.llm_veto,
-                d.llm_confidence as llm_conf,
-                d.llm_reason,
-                d.risk_checks_passed,
-                d.block_reason,
-                d.outcome as decision_outcome,
-                t.id as ft_trade_id,
-                t.is_open,
-                t.close_profit_pct,
-                t.close_date
-            FROM ai_decisions d
-            LEFT JOIN trades t ON d.trade_id = t.id
-            ORDER BY d.timestamp DESC
-        """
+        # Check if ai_decisions table exists
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_decisions'")
+        if not cursor.fetchone():
+            print("\n--- Weekly AI Decisions & Outcome Report ---")
+            print("The 'ai_decisions' table does not exist in the database. No decisions recorded yet.\n")
+            conn.close()
+            return
+
+        # Check if trades table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
+        has_trades_table = cursor.fetchone() is not None
+
+        if has_trades_table:
+            query = """
+                SELECT
+                    d.id as decision_id,
+                    d.trade_id,
+                    d.timestamp,
+                    d.pair,
+                    d.timeframe,
+                    d.tier,
+                    d.model_confidence,
+                    d.llm_invoked,
+                    d.llm_provider,
+                    d.llm_veto,
+                    d.llm_confidence as llm_conf,
+                    d.llm_reason,
+                    d.risk_checks_passed,
+                    d.block_reason,
+                    d.outcome as decision_outcome,
+                    t.is_open,
+                    t.close_profit_pct,
+                    t.close_date
+                FROM ai_decisions d
+                LEFT JOIN trades t ON d.trade_id = t.id
+                ORDER BY d.timestamp DESC
+            """
+        else:
+            # Fallback if trades table doesn't exist yet
+            query = """
+                SELECT
+                    d.id as decision_id,
+                    d.trade_id,
+                    d.timestamp,
+                    d.pair,
+                    d.timeframe,
+                    d.tier,
+                    d.model_confidence,
+                    d.llm_invoked,
+                    d.llm_provider,
+                    d.llm_veto,
+                    d.llm_confidence as llm_conf,
+                    d.llm_reason,
+                    d.risk_checks_passed,
+                    d.block_reason,
+                    d.outcome as decision_outcome,
+                    NULL as is_open,
+                    NULL as close_profit_pct,
+                    NULL as close_date
+                FROM ai_decisions d
+                ORDER BY d.timestamp DESC
+            """
+
         df = pd.read_sql_query(query, conn)
         conn.close()
 
         if df.empty:
             print("\n--- Weekly AI Decisions & Outcome Report ---")
-            print("No decisions or trades recorded in the database yet.\n")
+            print("No decisions recorded in the database yet.\n")
             return
 
-        # Filter by timeframe if needed (e.g., last 7 days)
-        # Note: In SQLite we can also filter via query but doing it in pandas is robust
-        if args.last == "7days":
-            # Just keep last 50 entries for readability if no timestamps are parsed
-            pass
+        # Convert timestamp to datetime and filter if requested
+        df['timestamp_dt'] = pd.to_datetime(df['timestamp'], errors='coerce')
+
+        if args.last is not None:
+            limit_date = datetime.utcnow() - timedelta(days=args.last)
+            df = df[df['timestamp_dt'] >= limit_date]
+
+        if df.empty:
+            print("\n--- Weekly AI Decisions & Outcome Report ---")
+            print(f"No decisions found in the last {args.last} days.\n")
+            return
+
+        # Process columns for presentation
+        report_rows = []
+        for _, row in df.iterrows():
+            # ID format: Decision ID / Trade ID
+            dec_id = row['decision_id']
+            trade_id_val = int(row['trade_id']) if pd.notna(row['trade_id']) else "N/A"
+            id_str = f"Dec #{dec_id} / Trade #{trade_id_val}" if trade_id_val != "N/A" else f"Dec #{dec_id}"
+
+            # LLM Veto Verdict
+            llm_veto_val = row['llm_veto']
+            llm_invoked_val = row['llm_invoked']
+            if llm_invoked_val:
+                veto_status = "Vetoed" if llm_veto_val else "Approved"
+            else:
+                veto_status = "N/A"
+
+            # Risk checks passed/failed
+            risk_ok = "Passed" if row['risk_checks_passed'] else "Failed"
+
+            # Block reason if blocked
+            block_reason_val = row['block_reason'] if pd.notna(row['block_reason']) and row['block_reason'] else "N/A"
+
+            # Outcome construction:
+            # "Win (+x.xx%)", "Loss (-x.xx%)", "Open", "Blocked"
+            # For rows vetoed or blocked, show the reason clearly
+            if not row['risk_checks_passed']:
+                outcome_str = f"Blocked ({row['block_reason']})" if row['block_reason'] else "Blocked (Risk check failed)"
+            elif llm_invoked_val and llm_veto_val:
+                outcome_str = f"Vetoed ({row['llm_reason']})" if row['llm_reason'] else "Vetoed (LLM vetoed)"
+            elif pd.notna(row['is_open']):
+                if row['is_open'] == 1:
+                    outcome_str = "Open"
+                else:
+                    profit = row['close_profit_pct']
+                    if profit is not None:
+                        if profit > 0:
+                            outcome_str = f"Win (+{profit:.2%})"
+                        elif profit < 0:
+                            outcome_str = f"Loss ({profit:.2%})"
+                        else:
+                            outcome_str = "Flat (0.00%)"
+                    else:
+                        outcome_str = "Closed"
+            else:
+                decision_outcome_val = row['decision_outcome'] if pd.notna(row['decision_outcome']) else "N/A"
+                outcome_str = f"Approved ({decision_outcome_val})"
+
+            report_rows.append({
+                "ID": id_str,
+                "Timestamp": row['timestamp'],
+                "Pair": row['pair'],
+                "Tier": row['tier'],
+                "Model Conf": f"{row['model_confidence']:.4f}" if pd.notna(row['model_confidence']) else "N/A",
+                "LLM Provider": row['llm_provider'] if pd.notna(row['llm_provider']) and row['llm_provider'] != "none" else "N/A",
+                "LLM Veto": veto_status,
+                "Risk OK": risk_ok,
+                "Block Reason": block_reason_val,
+                "Outcome": outcome_str
+            })
+
+        report_df = pd.DataFrame(report_rows)
 
         if args.output == "console":
-            print("\n" + "="*80)
+            print("\n" + "="*110)
             print("                       WEEKLY AI DECISIONS & OUTCOME REPORT")
-            print("="*80)
-
-            headers = [
-                "ID", "Pair", "Tier", "LGBM Conf", "LLM?", "Veto", "LLM Reason", "Risk OK", "Outcome"
-            ]
-
-            table_data = []
-            for _, row in df.iterrows():
-                llm_status = f"Yes ({row['llm_provider']})" if row['llm_invoked'] else "No"
-                veto_status = "True" if row['llm_veto'] else "False"
-
-                # Format outcome
-                outcome = row['decision_outcome']
-                if row['ft_trade_id'] is not None:
-                    profit = row['close_profit_pct']
-                    profit_str = f"{profit:.2%}" if profit is not None else "Open"
-                    outcome = f"Trade #{row['ft_trade_id']} ({profit_str})"
-
-                table_data.append([
-                    row['decision_id'],
-                    row['pair'],
-                    row['tier'],
-                    f"{row['model_confidence']:.2f}",
-                    llm_status,
-                    veto_status,
-                    str(row['llm_reason'])[:25],
-                    "Yes" if row['risk_checks_passed'] else "No",
-                    outcome
-                ])
-
-            print(tabulate(table_data, headers=headers, tablefmt="grid"))
-            print("="*80 + "\n")
+            print("="*110)
+            print(tabulate(report_df, headers='keys', tablefmt="grid", showindex=False))
+            print("="*110 + "\n")
 
         elif args.output == "csv":
             csv_path = "ai_decisions_report.csv"
-            df.to_csv(csv_path, index=False)
-            logger.info(f"Report saved to CSV file: {csv_path}")
+            report_df.to_csv(csv_path, index=False)
+            logger.info(f"Report successfully saved to CSV file: {csv_path}")
 
     except Exception as e:
         logger.error(f"An error occurred while generating report: {e}", exc_info=True)

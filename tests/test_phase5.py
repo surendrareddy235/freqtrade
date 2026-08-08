@@ -237,3 +237,72 @@ def test_reporting_main(tmp_path):
         assert os.path.exists("ai_decisions_report.csv")
         # Cleanup CSV
         os.remove("ai_decisions_report.csv")
+
+def test_reporting_timeframe_and_outcomes(tmp_path):
+    from datetime import datetime, timedelta
+    import pandas as pd
+    db_file = os.path.join(tmp_path, "test_timeframes.sqlite")
+    logger = DecisionLogger(db_file)
+
+    # 1. Blocked decision
+    logger.log_decision({
+        "trade_id": None,
+        "pair": "XRP/USDT",
+        "timeframe": "5m",
+        "tier": 1,
+        "model_confidence": 0.85,
+        "di_ok": 1,
+        "llm_invoked": 0,
+        "llm_provider": "none",
+        "llm_veto": 0,
+        "risk_checks_passed": 0,
+        "block_reason": "Max open trades reached",
+        "outcome": "blocked"
+    })
+
+    # 2. Vetoed decision
+    logger.log_decision({
+        "trade_id": None,
+        "pair": "SOL/USDT",
+        "timeframe": "5m",
+        "tier": 3,
+        "model_confidence": 0.90,
+        "di_ok": 1,
+        "llm_invoked": 1,
+        "llm_provider": "gemini",
+        "llm_veto": 1,
+        "llm_reason": "RSI too high",
+        "risk_checks_passed": 1,
+        "block_reason": None,
+        "outcome": "vetoed"
+    })
+
+    # Let's check timestamp update for the vetoed decision to simulate an older timestamp (e.g., 10 days ago)
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    ten_days_ago = (datetime.utcnow() - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("UPDATE ai_decisions SET timestamp = ? WHERE pair = 'SOL/USDT'", (ten_days_ago,))
+    conn.commit()
+    conn.close()
+
+    # Call main with --last 7days (should filter out SOL/USDT)
+    with patch("sys.argv", ["reporting.py", "--db-path", db_file, "--last", "7days", "--output", "csv"]):
+        reporting_main()
+        assert os.path.exists("ai_decisions_report.csv")
+        df = pd.read_csv("ai_decisions_report.csv")
+        assert len(df) == 1
+        assert df.iloc[0]["Pair"] == "XRP/USDT"
+        assert "Blocked (Max open trades reached)" in df.iloc[0]["Outcome"]
+        os.remove("ai_decisions_report.csv")
+
+    # Call main with --last 14days (should include SOL/USDT)
+    with patch("sys.argv", ["reporting.py", "--db-path", db_file, "--last", "14days", "--output", "csv"]):
+        reporting_main()
+        assert os.path.exists("ai_decisions_report.csv")
+        df = pd.read_csv("ai_decisions_report.csv")
+        assert len(df) == 2
+        # Order is by timestamp DESC, so XRP/USDT (recent) first, then SOL/USDT (older)
+        assert df.iloc[0]["Pair"] == "XRP/USDT"
+        assert df.iloc[1]["Pair"] == "SOL/USDT"
+        assert "Vetoed (RSI too high)" in df.iloc[1]["Outcome"]
+        os.remove("ai_decisions_report.csv")
