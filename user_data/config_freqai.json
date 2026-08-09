@@ -78,13 +78,11 @@
         },
         "ccxt_async_config": {},
         "pair_whitelist": [
-            "XRP/USDT",
-            "ADA/USDT",
-            "SOL/USDT",
-            "DOGE/USDT",
-            "LTC/USDT"
+            ".*/USDT"
         ],
         "pair_blacklist": [
+            "BTC/USDT",
+            "ETH/USDT",
             "USDC/USDT",
             "DAI/USDT",
             "BUSD/USDT"
@@ -107,7 +105,29 @@
     },
     "pairlists": [
         {
-            "method": "StaticPairList"
+            "method": "VolumePairList",
+            "number_assets": 15,
+            "sort_key": "quoteVolume",
+            "refresh_period": 1800
+        },
+        {
+            "method": "PriceFilter",
+            "max_price": 10
+        },
+        {
+            "method": "AgeFilter",
+            "min_days_listed": 30
+        },
+        {
+            "method": "SpreadFilter",
+            "max_spread_ratio": 0.005
+        },
+        {
+            "method": "VolatilityFilter",
+            "lookback_days": 10,
+            "min_volatility": 0.05,
+            "max_volatility": 0.50,
+            "sort_direction": "asc"
         }
     ],
     "risk_manager": {
