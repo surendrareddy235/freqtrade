@@ -47,11 +47,19 @@ class LightGBMClassifier(BaseClassifierModel):
 
         init_model = self.get_init_model(dk.pair)
 
+        import lightgbm as lgb
+
         model = LGBMClassifier(**self.model_training_parameters)
         activate_tensorboard = self.freqai_info.get("activate_tensorboard", True)
         callbacks: list[Callable[..., Any]] = []
         if LightGBMCallback is not None:
             callbacks = [LightGBMCallback(dk.data_path, activate_tensorboard)]
+
+        # Add early stopping callback if eval_set is provided
+        if eval_set is not None:
+            early_stopping_rounds = self.freqai_info.get("model_training_parameters", {}).get("early_stopping_rounds", 50)
+            callbacks.append(lgb.early_stopping(stopping_rounds=early_stopping_rounds, verbose=False))
+
         model.fit(
             X=X,
             y=y,

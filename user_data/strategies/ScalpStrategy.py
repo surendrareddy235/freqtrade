@@ -243,20 +243,19 @@ class ScalpStrategy(IStrategy):
                 prob_col = col
                 break
 
-        # Generate entry signals if predicted class is 1, and do_predict == 1
-        # If probability column exists, we enforce our floor of confidence >= 0.55
+        # Read the single source of truth tier thresholds from config
+        tier_3_th = self.config.get("tier_classification", {}).get("tier_3_threshold", 0.55)
+
+        # Generate entry signals purely based on FreqAI's prediction probability column,
+        # never referencing the &target column directly to completely eliminate look-ahead leakage.
         if prob_col is not None:
             dataframe.loc[
-                (dataframe["&target"] == 1) &
                 (dataframe["do_predict"] == 1) &
-                (dataframe[prob_col] >= 0.55),
+                (dataframe[prob_col] >= tier_3_th),
                 ["enter_long", "enter_tag"]
             ] = (1, "long_scalp")
         else:
-            dataframe.loc[
-                (dataframe["&target"] == 1) & (dataframe["do_predict"] == 1),
-                ["enter_long", "enter_tag"]
-            ] = (1, "long_scalp")
+            logger.warning("Prediction probability column ('1' or similar) not found. No entry signals generated.")
 
         return dataframe
 
