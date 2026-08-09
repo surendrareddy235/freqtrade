@@ -72,6 +72,29 @@ class ScalpStrategy(IStrategy):
         self.last_processed_timestamp = {}
         self.linked_trade_ids = set()
 
+        # Backtesting risk manager blocked counters
+        self.blocked_by_liquidation_distance = 0
+        self.total_confirm_entries_called = 0
+
+    def leverage(self, pair: str, current_time: datetime, current_rate: float,
+                 proposed_leverage: float, max_leverage: float, entry_tag: Optional[str], side: str,
+                 **kwargs) -> float:
+        """
+        Customize leverage for each trade. Returns the config-driven leverage value.
+        """
+        return float(self.config.get("leverage", 3.0))
+
+    def __del__(self):
+        try:
+            if hasattr(self, "blocked_by_liquidation_distance") and self.blocked_by_liquidation_distance > 0:
+                print("\n" + "="*60)
+                print(f"BACKTEST RISK MANAGER REPORT:")
+                print(f"Total confirm_trade_entry calls: {self.total_confirm_entries_called}")
+                print(f"Candidates blocked by liquidation-distance check: {self.blocked_by_liquidation_distance}")
+                print("="*60 + "\n")
+        except Exception:
+            pass
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
         Populate base indicators that feed into FreqAI feature pipeline.
@@ -553,11 +576,11 @@ class ScalpStrategy(IStrategy):
                             break
 
             # 3. Fetch minimum order notional limit for the exchange
-            min_notional = 10.0  # Safe robust baseline default for USDT spot markets
+            min_notional = 5.0  # Safe robust baseline default for USDT futures markets
             try:
                 if hasattr(self.dp, "market") and self.dp.market(pair) is not None:
                     market_info = self.dp.market(pair)
-                    min_notional = market_info.get("limits", {}).get("cost", {}).get("min", 10.0) or 10.0
+                    min_notional = market_info.get("limits", {}).get("cost", {}).get("min", 5.0) or 5.0
             except Exception:
                 pass
 
@@ -571,8 +594,23 @@ class ScalpStrategy(IStrategy):
             if available_balance is None:
                 available_balance = self.config.get("dry_run_wallet", 1000.0)
 
-            # 5. Proposed stake amount
+            # 5. Proposed stake amount (notional position size)
             proposed_stake = amount * rate
+
+            # Leverage & liquidation price parameters retrieval
+            leverage_val = float(self.config.get("leverage", 3.0))
+            mm_ratio = 0.05  # Conservative 5% default fallback
+            maint_amt = 0.0
+
+            if hasattr(self, "dp") and self.dp is not None:
+                try:
+                    exchange = getattr(self.dp, "exchange", None)
+                    if exchange is not None and hasattr(exchange, "get_maintenance_ratio_and_amt"):
+                        mm_ratio, maint_amt = exchange.get_maintenance_ratio_and_amt(pair, proposed_stake)
+                        if maint_amt is None:
+                            maint_amt = 0.0
+                except Exception as e:
+                    logger.debug(f"Could not retrieve dynamic MMR from exchange, using fallback: {e}")
 
             # 6. Execute all RiskManager checks sequentially
             # In Phase 6, the LLM veto is fully active and blocks trades if veto is True.
@@ -587,8 +625,17 @@ class ScalpStrategy(IStrategy):
                 min_notional=min_notional,
                 is_correlated=is_correlated,
                 is_dry_run=is_dry_run,
-                llm_veto=llm_veto
+                llm_veto=llm_veto,
+                leverage=leverage_val,
+                open_rate=rate,
+                mm_ratio=mm_ratio,
+                maint_amt=maint_amt
             )
+
+            # Increment tracking counters
+            self.total_confirm_entries_called += 1
+            if not passed and reason == "liquidation_risk":
+                self.blocked_by_liquidation_distance += 1
 
             # 7. Record structured decision in SQLite database
             decision_data = {

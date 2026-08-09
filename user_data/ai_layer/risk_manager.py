@@ -39,6 +39,9 @@ class RiskManager:
         # 7. Minimum balance buffer
         self.min_balance_buffer = self.config.get("min_balance_buffer", 1.5)
 
+        # Stoploss configuration from top-level config (e.g. -0.01 for -1%)
+        self.stoploss = abs(config.get("stoploss", -0.01)) if config else 0.01
+
     def calculate_correlation(self, candidate_returns: pd.Series, open_returns: pd.Series) -> float:
         """
         Calculates a real deterministic Pearson correlation on close returns.
@@ -55,16 +58,19 @@ class RiskManager:
                         daily_drawdown_pct: float, max_open_trades: int,
                         proposed_stake: float, available_balance: float, min_notional: float,
                         is_correlated: bool, is_dry_run: bool = True,
-                        llm_veto: bool = False) -> tuple[bool, str]:
+                        llm_veto: bool = False,
+                        leverage: float = 1.0, open_rate: float = 0.0,
+                        mm_ratio: float = 0.05, maint_amt: float = 0.0) -> tuple[bool, str]:
         """
         Runs all deterministic checks in the exact specified order:
         1. Max open trades
         2. Max trades per day
         3. Daily drawdown kill-switch (5%)
-        4. Per-trade position sizing
+        4. Per-trade position sizing (Leverage-adjusted margin required vs. wallet balance percent)
         5. Correlation check
         6. LLM veto check
-        7. Minimum-viable-balance check (Bypassed in dry-run mode)
+        7. Liquidation-distance check (Pre-trade safety gate before liquidation risk)
+        8. Minimum-viable-balance check (Bypassed in dry-run mode, uses futures minimum notional)
 
         Returns tuple (passed: bool, reason: str).
         """
@@ -87,10 +93,11 @@ class RiskManager:
             return False, msg
 
         # 4. Per-trade position sizing check (hard cap)
-        max_allowed_stake = available_balance * self.position_size_percent
-        if proposed_stake > max_allowed_stake:
+        proposed_margin = proposed_stake / leverage if leverage > 0 else proposed_stake
+        max_allowed_margin = available_balance * self.position_size_percent
+        if proposed_margin > max_allowed_margin:
             msg = "position_size_exceeded"
-            logger.info(f"Trade blocked for {pair}. Reason: {msg} (proposed_stake={proposed_stake:.2f}, limit={max_allowed_stake:.2f})")
+            logger.info(f"Trade blocked for {pair}. Reason: {msg} (proposed_margin={proposed_margin:.2f}, limit={max_allowed_margin:.2f})")
             return False, msg
 
         # 5. Correlation check
@@ -105,7 +112,25 @@ class RiskManager:
             logger.info(f"Trade blocked for {pair}. Reason: {msg}")
             return False, msg
 
-        # 7. Minimum-viable-balance check (Bypassed in dry-run mode)
+        # 7. Liquidation-distance check (§B.6.8)
+        if open_rate > 0 and leverage > 0:
+            numerator = open_rate * (1.0 - 1.0 / leverage)
+            if proposed_stake > 0:
+                numerator -= (maint_amt * open_rate) / proposed_stake
+            liq_price = numerator / (1.0 - mm_ratio)
+
+            if liq_price >= open_rate or liq_price <= 0:
+                liq_distance = 0.0
+            else:
+                liq_distance = (open_rate - liq_price) / open_rate
+
+            required_distance = 2.0 * self.stoploss
+            if liq_distance < required_distance:
+                msg = "liquidation_risk"
+                logger.warning(f"Trade blocked for {pair}. Reason: {msg} (liq_price={liq_price:.4f}, liq_distance={liq_distance:.4%}, required={required_distance:.4%})")
+                return False, msg
+
+        # 8. Minimum-viable-balance check (Bypassed in dry-run mode)
         if not is_dry_run:
             required_min = min_notional * self.min_balance_buffer
             if available_balance < required_min:
