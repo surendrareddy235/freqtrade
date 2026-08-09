@@ -23,7 +23,7 @@ def test_config(tmp_path):
         "dry_run_wallet": 1000.0,
         "db_url": f"sqlite:///{db_file}",
         "risk_manager": {
-            "max_trades_per_day": 10,
+            "max_daily_trades": 10,
             "daily_drawdown_limit": 0.05,
             "position_size_percent": 1.0,
             "correlation_threshold": 0.85,
