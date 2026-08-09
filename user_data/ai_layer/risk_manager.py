@@ -27,9 +27,10 @@ class RiskManager:
         if self.daily_drawdown_limit > 1.0:
             self.daily_drawdown_limit /= 100.0
 
-        # 4. Position size percent (percent or ratio, e.g. 1.0 for 1% = 0.01)
+        # 4. Position size limit. Values >= 1 are percentages (1.0 means 1%).
+        # Ratios below 1 are accepted directly (0.01 also means 1%).
         self.position_size_percent = self.config.get("position_size_percent", self.config.get("position_sizing_pct", 1.0))
-        if self.position_size_percent > 1.0:
+        if self.position_size_percent >= 1.0:
             self.position_size_percent /= 100.0
 
         # 5. Correlation threshold

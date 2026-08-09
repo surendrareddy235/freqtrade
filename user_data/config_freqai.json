@@ -1,7 +1,6 @@
 {
     "$schema": "https://schema.freqtrade.io/schema.json",
     "trading_mode": "spot",
-    "margin_mode": "isolated",
     "max_open_trades": 1,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
@@ -121,8 +120,8 @@
         "balance_safety_buffer_factor": 1.5
     },
     "tier_classification": {
-        "tier_1_threshold": 0.80,
-        "tier_2_threshold": 0.60,
+        "tier_1_threshold": 0.8,
+        "tier_2_threshold": 0.6,
         "tier_3_threshold": 0.55
     },
     "api_server": {

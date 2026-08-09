@@ -20,9 +20,16 @@ def test_risk_manager_init():
     rm = RiskManager(config)
     assert rm.max_trades_per_day == 5
     assert rm.daily_drawdown_limit == 0.05
-    assert rm.position_size_percent == 0.02  # converted from 2.0 %
+    assert rm.position_size_percent == 0.02  # converted from 2.0%
     assert rm.correlation_threshold == 0.85
     assert rm.min_balance_buffer == 1.5
+
+
+def test_risk_manager_position_size_one_is_one_percent():
+    config = {"risk_manager": {"position_size_percent": 1.0}}
+    rm = RiskManager(config)
+
+    assert rm.position_size_percent == 0.01
 
 def test_risk_manager_calculate_correlation():
     config = {}
