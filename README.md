@@ -1,237 +1,97 @@
-# ![freqtrade](https://raw.githubusercontent.com/freqtrade/freqtrade/develop/docs/assets/freqtrade_poweredby.svg)
+# Crypto-Scalping-Bot: FreqAI, Tiers, Risk Manager, and LLM Veto (v1)
 
-[![Freqtrade CI](https://github.com/freqtrade/freqtrade/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/freqtrade/freqtrade/actions/workflows/ci.yml)
-[![DOI](https://joss.theoj.org/papers/10.21105/joss.04864/status.svg)](https://doi.org/10.21105/joss.04864)
-[![codecov](https://codecov.io/gh/freqtrade/freqtrade/branch/develop/graph/badge.svg?token=AD5BG3ATKI)](https://codecov.io/gh/freqtrade/freqtrade)
-[![Documentation](https://readthedocs.org/projects/freqtrade/badge/)](https://www.freqtrade.io)
-[![Discord Server](https://img.shields.io/badge/Freqtrade_Discord-4E4E4E?logo=discord)](https://discord.gg/p7nuUNVfP7)
+This repository contains a professional crypto-scalping trading system built on top of Freqtrade. It integrates FreqAI adaptive modeling, a multi-tier candidate classification scheme, a deterministic Risk Manager, an active LLM Veto context agent, and custom sqlite-based outcome logging and reporting.
 
-Freqtrade is a free and open source crypto trading bot written in Python. It is designed to support all major exchanges and be controlled via Telegram or webUI. It contains backtesting, plotting and money management tools as well as strategy optimization by machine learning.
+---
 
-![freqtrade](https://raw.githubusercontent.com/freqtrade/freqtrade/develop/docs/assets/freqtrade-screenshot.png)
+## 1. Directory Structure (`user_data/`)
 
-## Disclaimer
+All custom system components are organized and modularized within the standard Freqtrade `user_data/` directory, keeping the core engine completely untouched:
 
-This software is for educational purposes only. Do not risk money which
-you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS
-AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
-
-Always start by running a trading bot in Dry-Run and do not engage money
-before you understand how it works and what profit/loss you should
-expect.
-
-We strongly recommend you to have coding and Python knowledge. Do not
-hesitate to read the source code and understand the mechanism of this bot.
-
-## Supported Exchange marketplaces
-
-Please read the [exchange-specific notes](https://www.freqtrade.io/en/stable/exchanges/) to learn about special configurations that maybe needed for each exchange.
-
-### Supported Spot Exchanges
-
-- [X] [Binance](https://www.binance.com/)
-- [X] [BingX](https://bingx.com/invite/0EM9RX)
-- [X] [Bitget](https://www.bitget.com/)
-- [X] [Bitmart](https://bitmart.com/)
-- [X] [Bybit EU](https://bybit.eu/)
-- [X] [Bybit](https://bybit.com/)
-- [X] [Gate EU](https://www.gate.com/en-eu)
-- [X] [Gate](https://www.gate.com/ref/6266643)
-- [X] [HTX](https://www.htx.com/)
-- [X] [Hyperliquid](https://hyperliquid.xyz/) (A decentralized exchange, or DEX)
-- [X] [Kraken](https://kraken.com/)
-- [X] [MyOKX](https://okx.com/) (OKX EEA)
-- [X] [OKX](https://okx.com/)
-- [ ] [potentially many others](https://github.com/ccxt/ccxt/). _(We cannot guarantee they will work)_
-
-### Supported Futures Exchanges
-
-- [X] [Binance](https://www.binance.com/)
-- [X] [Bitget](https://www.bitget.com/)
-- [X] [Bybit](https://bybit.com/)
-- [X] [Gate](https://www.gate.com/ref/6266643)
-- [X] [Hyperliquid](https://hyperliquid.xyz/) (A decentralized exchange, or DEX)
-- [X] [Kraken](https://www.kraken.com/features/futures)
-- [X] [OKX](https://okx.com/)
-
-Please make sure to read the [exchange specific notes](https://www.freqtrade.io/en/stable/exchanges/), as well as the [trading with leverage](https://www.freqtrade.io/en/stable/leverage/) documentation before diving in.
-
-### Community tested
-
-Exchanges confirmed working by the community:
-
-- [X] [Bitvavo](https://bitvavo.com/)
-- [X] [Kucoin](https://www.kucoin.com/)
-
-## Documentation
-
-We invite you to read the bot documentation to ensure you understand how the bot is working.
-
-Please find the complete documentation on the [freqtrade website](https://www.freqtrade.io).
-
-## Features
-
-- [x] **Based on Python 3.11+**: For botting on any operating system - Windows, macOS and Linux.
-- [x] **Persistence**: Persistence is achieved through sqlite.
-- [x] **Dry-run**: Run the bot without paying money.
-- [x] **Backtesting**: Run a simulation of your buy/sell strategy.
-- [x] **Strategy Optimization by machine learning**: Use machine learning to optimize your buy/sell strategy parameters with real exchange data.
-- [X] **Adaptive prediction modeling**: Build a smart strategy with FreqAI that self-trains to the market via adaptive machine learning methods. [Learn more](https://www.freqtrade.io/en/stable/freqai/)
-- [x] **Whitelist crypto-currencies**: Select which crypto-currency you want to trade or use dynamic whitelists.
-- [x] **Blacklist crypto-currencies**: Select which crypto-currency you want to avoid.
-- [x] **Builtin WebUI**: Builtin web UI to manage your bot.
-- [x] **Manageable via Telegram**: Manage the bot with Telegram.
-- [x] **Display profit/loss in fiat**: Display your profit/loss in fiat currency.
-- [x] **Performance status report**: Provide a performance status of your current trades.
-
-## Quick start
-
-Please refer to the [Docker Quickstart documentation](https://www.freqtrade.io/en/stable/docker_quickstart/) on how to get started quickly.
-
-For further (native) installation methods, please refer to the [Installation documentation page](https://www.freqtrade.io/en/stable/installation/).
-
-## Basic Usage
-
-### Bot commands
-
-```
-usage: freqtrade [-h] [-V]
-                 {trade,create-userdir,new-config,show-config,new-strategy,download-data,convert-data,convert-trade-data,trades-to-ohlcv,list-data,backtesting,backtesting-show,backtesting-analysis,edge,hyperopt,hyperopt-list,hyperopt-show,list-exchanges,list-markets,list-pairs,list-strategies,list-hyperoptloss,list-freqaimodels,list-timeframes,show-trades,test-pairlist,convert-db,install-ui,plot-dataframe,plot-profit,webserver,strategy-updater,lookahead-analysis,recursive-analysis}
-                 ...
-
-Free, open source crypto trading bot
-
-positional arguments:
-  {trade,create-userdir,new-config,show-config,new-strategy,download-data,convert-data,convert-trade-data,trades-to-ohlcv,list-data,backtesting,backtesting-show,backtesting-analysis,edge,hyperopt,hyperopt-list,hyperopt-show,list-exchanges,list-markets,list-pairs,list-strategies,list-hyperoptloss,list-freqaimodels,list-timeframes,show-trades,test-pairlist,convert-db,install-ui,plot-dataframe,plot-profit,webserver,strategy-updater,lookahead-analysis,recursive-analysis}
-    trade               Trade module.
-    create-userdir      Create user-data directory.
-    new-config          Create new config
-    show-config         Show resolved config
-    new-strategy        Create new strategy
-    download-data       Download backtesting data.
-    convert-data        Convert candle (OHLCV) data from one format to
-                        another.
-    convert-trade-data  Convert trade data from one format to another.
-    trades-to-ohlcv     Convert trade data to OHLCV data.
-    list-data           List downloaded data.
-    backtesting         Backtesting module.
-    backtesting-show    Show past Backtest results
-    backtesting-analysis
-                        Backtest Analysis module.
-    hyperopt            Hyperopt module.
-    hyperopt-list       List Hyperopt results
-    hyperopt-show       Show details of Hyperopt results
-    list-exchanges      Print available exchanges.
-    list-markets        Print markets on exchange.
-    list-pairs          Print pairs on exchange.
-    list-strategies     Print available strategies.
-    list-hyperoptloss   Print available hyperopt loss functions.
-    list-freqaimodels   Print available freqAI models.
-    list-timeframes     Print available timeframes for the exchange.
-    show-trades         Show trades.
-    test-pairlist       Test your pairlist configuration.
-    convert-db          Migrate database to different system
-    install-ui          Install FreqUI
-    plot-dataframe      Plot candles with indicators.
-    plot-profit         Generate plot showing profits.
-    webserver           Webserver module.
-    strategy-updater    updates outdated strategy files to the current version
-    lookahead-analysis  Check for potential look ahead bias.
-    recursive-analysis  Check for potential recursive formula issue.
-
-options:
-  -h, --help            show this help message and exit
-  -V, --version         show program's version number and exit
+```text
+user_data/
+├── strategies/
+│   └── ScalpStrategy.py       # Core strategy with FreqAI feature engineering, tier classification, and risk/LLM hooks
+├── ai_layer/
+│   ├── __init__.py
+│   ├── llm_client.py          # LLM Context Agent client (Groq primary, Gemini fallback, failsafe veto)
+│   ├── prompt_templates.py    # Compressed state-to-prompt formatter
+│   ├── state_cache.py         # Discretized, per-pair isolated state cache to optimize LLM API usage
+│   ├── risk_manager.py        # Deterministic Risk Manager implementing all seven B.6 rules
+│   ├── decision_logger.py     # Schema creator and persistent logger for the custom 'ai_decisions' table
+│   └── reporting.py           # Core reporting implementation (Weekly review & outcome analysis tool)
+├── config_freqai.json         # Master configuration for Freqtrade, FreqAI, Risk Manager, and Tiers
+└── tradesv3.dryrun.sqlite     # SQLite database containing native 'trades' and custom 'ai_decisions'
 ```
 
-### Telegram RPC commands
+---
 
-Telegram is not mandatory. However, this is a great way to control your bot. More details and the full command list on the [documentation](https://www.freqtrade.io/en/stable/telegram-usage/)
+## 2. Operation Manual
 
-- `/start`: Starts the trader.
-- `/stop`: Stops the trader.
-- `/stopentry`: Stop entering new trades.
-- `/status <trade_id>|[table]`: Lists all or specific open trades.
-- `/profit [<n>]`: Lists cumulative profit from all finished trades, over the last n days.
-- `/profit_long [<n>]`: Lists cumulative profit from all finished long trades, over the last n days.
-- `/profit_short [<n>]`: Lists cumulative profit from all finished short trades, over the last n days.
-- `/forceexit <trade_id>|all`: Instantly exits the given trade (Ignoring `minimum_roi`).
-- `/fx <trade_id>|all`: Alias to `/forceexit`
-- `/performance`: Show performance of each finished trade grouped by pair
-- `/balance`: Show account balance per currency.
-- `/daily <n>`: Shows profit or loss per day, over the last n days.
-- `/help`: Show help message.
-- `/version`: Show version.
+### Running Backtests
+Before backtesting, ensure you have downloaded historical candlestick data for the configured coin pairs:
+```bash
+freqtrade download-data --config user_data/config_freqai.json --timeframes 5m --timerange 20260101-
+```
+Then, execute the backtest using the ScalpStrategy:
+```bash
+freqtrade backtesting --config user_data/config_freqai.json --strategy ScalpStrategy --timerange 20260101-
+```
 
+### Running Dry-Run Mode
+Dry-run operates against real-time market feeds using a virtual wallet. This is the **default and mandatory validation mode** prior to risking real capital.
+To launch:
+```bash
+freqtrade trade --config user_data/config_freqai.json --strategy ScalpStrategy
+```
+*Note: If booting dry-run for the first time without pre-existing training data, you can temporarily disable FreqAI training under the `"freqai": { "enabled": false }` configuration block to verify connection and strategy hooks.*
 
-## Development branches
+### Running the Reporting Tool
+`reporting.py` is a manual CLI tool designed for weekly review loops. It joins Freqtrade's native `trades` table with the custom `ai_decisions` table to analyze LGBM predictions, LLM vetoes, and risk checks against actual trade outcomes.
 
-The project is currently setup in two main branches:
+- **To show all historical records (Console Table):**
+  ```bash
+  python reporting.py
+  ```
+- **To filter for the last 7 days (Console Table):**
+  ```bash
+  python reporting.py --last 7days
+  ```
+- **To filter for the last 14 days and export to CSV:**
+  ```bash
+  python reporting.py --last 14days --output csv
+  ```
+  This creates an `ai_decisions_report.csv` file in the repository root.
 
-- `develop` - This branch has often new features, but might also contain breaking changes. We try hard to keep this branch as stable as possible.
-- `stable` - This branch contains the latest stable release. This branch is generally well tested.
-- `feat/*` - These are feature branches, which are being worked on heavily. Please don't use these unless you want to test a specific feature.
+---
 
-## Support
+## 3. Tool Comparison & Ecosystem Alignment
 
-### Help / Discord
+There are **three separate and distinct** monitoring and inspection tools in the v1 architecture. Do not conflate them:
 
-For any questions not covered by the documentation or for further information about the bot, or to simply engage with like-minded individuals, we encourage you to join the Freqtrade [discord server](https://discord.gg/p7nuUNVfP7).
+| Tool | Purpose | Source of Data | How to Access / Run |
+| :--- | :--- | :--- | :--- |
+| **Tensorboard** | FreqAI training inspection, loss/accuracy curves, and feature importance across retraining epochs. | FreqAI model training logs (`user_data/models/`) | `tensorboard --logdir user_data/models/` |
+| **FreqUI** | High-level trade and wallet metrics, equity curves, win rate, profit factor, and transaction history. | Freqtrade native `trades` table | Enable `api_server` in config; access via browser |
+| **reporting.py** | Manual AI decision versus real outcome review (LGBM confidence, LLM veto, risk checks passed/failed vs. Win/Loss). | Left-join of custom `ai_decisions` and native `trades` | `python reporting.py [args]` |
 
-### [Bugs / Issues](https://github.com/freqtrade/freqtrade/issues?q=is%3Aissue)
+---
 
-If you discover a bug in the bot, please
-[search the issue tracker](https://github.com/freqtrade/freqtrade/issues?q=is%3Aissue)
-first. If it hasn't been reported, please
-[create a new issue](https://github.com/freqtrade/freqtrade/issues/new/choose) and
-ensure you follow the template guide so that the team can assist you as
-quickly as possible.
+## 4. Live Trading Guardrails & Safety Requirements
 
-For every [issue](https://github.com/freqtrade/freqtrade/issues/new/choose) created, kindly follow up and mark satisfaction or reminder to close issue when equilibrium ground is reached.
+Transitioning from dry-run to live trading requires strict adherence to safety protocols and system requirements:
 
---Maintain github's [community policy](https://docs.github.com/en/site-policy/github-terms/github-community-code-of-conduct)--
+1. **The 2-Week Dry-Run Rule (URS §A.6)**:
+   Live trading with real capital should **ONLY** be initiated after the system has run in dry-run mode continuously for at least **2 weeks** and demonstrated consistent, stable profitability. No exceptions.
+2. **Minimum-Viable-Balance Check (B.6.7)**:
+   Live orders will refuse to execute unless the available account balance exceeds the exchange's minimum order notional limit plus a configurable safety buffer (default is minimum notional × 1.5). If this check fails, the trade candidate is blocked, logged as `insufficient_balance`, and bypassed. This protects against system orders getting rejected due to capital depletion.
+3. **API Key Security**:
+   Ensure your Binance API key and secret are stored securely using environment variables or a separate `.env` file. Never commit credentials to version control. Set exchange permissions to trade-only (withdrawals must be disabled).
 
-### [Feature Requests](https://github.com/freqtrade/freqtrade/labels/enhancement)
+---
 
-Have you a great idea to improve the bot you want to share? Please,
-first search if this feature was not [already discussed](https://github.com/freqtrade/freqtrade/labels/enhancement).
-If it hasn't been requested, please
-[create a new request](https://github.com/freqtrade/freqtrade/issues/new/choose)
-and ensure you follow the template guide so that it does not get lost
-in the bug reports.
+## 5. Practical Operational Notes
 
-### [Pull Requests](https://github.com/freqtrade/freqtrade/pulls)
-
-Feel like the bot is missing a feature? We welcome your pull requests!
-
-Please read the
-[Contributing document](https://github.com/freqtrade/freqtrade/blob/develop/CONTRIBUTING.md)
-to understand the requirements before sending your pull-requests.
-
-Coding is not a necessity to contribute - maybe start with improving the documentation?
-Issues labeled [good first issue](https://github.com/freqtrade/freqtrade/labels/good%20first%20issue) can be good first contributions, and will help get you familiar with the codebase.
-
-**Note** before starting any major new feature work, *please open an issue describing what you are planning to do* or talk to us on [discord](https://discord.gg/p7nuUNVfP7) (please use the #dev channel for this). This will ensure that interested parties can give valuable feedback on the feature, and let others know that you are working on it.
-
-**Important:** Always create your PR against the `develop` branch, not `stable`.
-
-## Requirements
-
-### Up-to-date clock
-
-The clock must be accurate, synchronized to a NTP server very frequently to avoid problems with communication to the exchanges.
-
-### Minimum hardware required
-
-To run this bot we recommend you a cloud instance with a minimum of:
-
-- Minimal (advised) system requirements: 2GB RAM, 1GB disk space, 2vCPU
-
-### Software requirements
-
-- [Python >= 3.11](http://docs.python-guide.org/en/latest/starting/installation/)
-- [pip](https://pip.pypa.io/en/stable/installing/)
-- [git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git)
-- [TA-Lib](https://ta-lib.github.io/ta-lib-python/)
-- [virtualenv](https://virtualenv.pypa.io/en/stable/installation.html) (Recommended)
-- [Docker](https://www.docker.com/products/docker) (Recommended)
+- **Untouched Freqtrade Core**: This project strictly modifies files within `user_data/` (or adds root-level scripts like `reporting.py`). Keep the upstream core engine pristine to ensure seamless package upgrades.
+- **SQLite Database Source of Truth**: The custom `ai_decisions` table resides inside Freqtrade's native SQLite database file. This ensures backups, environment separation (e.g. dry-run vs. live database files), and general management remain perfectly aligned.
+- **Manual Review Tooling**: `reporting.py` is executed manually as part of your calibration loops. It is not designed to run on a Cron job or scheduling daemon. Use its CSV export feature to maintain offline Excel-compatible logs of model decisions.
