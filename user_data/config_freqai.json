@@ -1,6 +1,8 @@
 {
     "$schema": "https://schema.freqtrade.io/schema.json",
-    "trading_mode": "spot",
+    "trading_mode": "futures",
+    "margin_mode": "isolated",
+    "leverage": 3,
     "max_open_trades": 1,
     "stake_currency": "USDT",
     "stake_amount": "unlimited",
@@ -109,15 +111,11 @@
         }
     ],
     "risk_manager": {
-        "max_trades_per_day": 10,
+        "max_daily_trades": 10,
         "daily_drawdown_limit": 0.05,
         "position_size_percent": 1.0,
         "correlation_threshold": 0.85,
-        "min_balance_buffer": 1.5,
-        "drawdown_limit_pct": 5.0,
-        "position_sizing_pct": 1.0,
-        "daily_trade_cap": 10,
-        "balance_safety_buffer_factor": 1.5
+        "min_balance_buffer": 1.5
     },
     "tier_classification": {
         "tier_1_threshold": 0.8,

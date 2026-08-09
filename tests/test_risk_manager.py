@@ -10,7 +10,7 @@ def test_risk_manager_init():
     config = {
         "max_open_trades": 3,
         "risk_manager": {
-            "max_trades_per_day": 5,
+            "max_daily_trades": 5,
             "daily_drawdown_limit": 0.05,
             "position_size_percent": 2.0,
             "correlation_threshold": 0.85,
@@ -18,7 +18,7 @@ def test_risk_manager_init():
         }
     }
     rm = RiskManager(config)
-    assert rm.max_trades_per_day == 5
+    assert rm.max_daily_trades == 5
     assert rm.daily_drawdown_limit == 0.05
     assert rm.position_size_percent == 0.02  # converted from 2.0%
     assert rm.correlation_threshold == 0.85
@@ -52,7 +52,7 @@ def test_risk_manager_check_all_rules_sequential():
     config = {
         "max_open_trades": 3,
         "risk_manager": {
-            "max_trades_per_day": 5,
+            "max_daily_trades": 5,
             "daily_drawdown_limit": 0.05,
             "position_size_percent": 10.0,  # 10%
             "correlation_threshold": 0.85,

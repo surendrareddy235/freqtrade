@@ -20,16 +20,16 @@ class RiskManager:
         self.max_open_trades = config.get("max_open_trades", 1) if config else 1
 
         # 2. Max trades per day
-        self.max_trades_per_day = self.config.get("max_trades_per_day", self.config.get("daily_trade_cap", 10))
+        self.max_daily_trades = self.config.get("max_daily_trades", 10)
 
         # 3. Daily drawdown limit (ratio, e.g. 0.05 for 5%)
-        self.daily_drawdown_limit = self.config.get("daily_drawdown_limit", self.config.get("drawdown_limit_pct", 5.0))
+        self.daily_drawdown_limit = self.config.get("daily_drawdown_limit", 0.05)
         if self.daily_drawdown_limit > 1.0:
             self.daily_drawdown_limit /= 100.0
 
         # 4. Position size limit. Values >= 1 are percentages (1.0 means 1%).
         # Ratios below 1 are accepted directly (0.01 also means 1%).
-        self.position_size_percent = self.config.get("position_size_percent", self.config.get("position_sizing_pct", 1.0))
+        self.position_size_percent = self.config.get("position_size_percent", 1.0)
         if self.position_size_percent >= 1.0:
             self.position_size_percent /= 100.0
 
@@ -75,9 +75,9 @@ class RiskManager:
             return False, msg
 
         # 2. Max trades per day
-        if daily_trades >= self.max_trades_per_day:
+        if daily_trades >= self.max_daily_trades:
             msg = "max_trades_per_day_exceeded"
-            logger.info(f"Trade blocked for {pair}. Reason: {msg} (trades_today={daily_trades}, cap={self.max_trades_per_day})")
+            logger.info(f"Trade blocked for {pair}. Reason: {msg} (trades_today={daily_trades}, cap={self.max_daily_trades})")
             return False, msg
 
         # 3. Daily drawdown kill-switch
