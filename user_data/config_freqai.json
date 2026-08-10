@@ -5,7 +5,7 @@
     "leverage": 3,
     "max_open_trades": 1,
     "stake_currency": "USDT",
-    "stake_amount": "unlimited",
+    "stake_amount": 10.0,
     "tradable_balance_ratio": 1.0,
     "fiat_display_currency": "USD",
     "dry_run": true,
@@ -38,8 +38,8 @@
                 "1h"
             ],
             "include_corr_pairlist": [
-                "BTC/USDT",
-                "ETH/USDT"
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT"
             ],
             "label_period_candles": 8,
             "include_shifted_candles": 2,
@@ -70,7 +70,7 @@
         }
     },
     "exchange": {
-        "name": "binance",
+        "name": "okx",
         "key": "",
         "secret": "",
         "ccxt_config": {
@@ -78,14 +78,18 @@
         },
         "ccxt_async_config": {},
         "pair_whitelist": [
-            ".*/USDT"
+            "XRP/USDT:USDT",
+            "SOL/USDT:USDT",
+            "ADA/USDT:USDT",
+            "DOGE/USDT:USDT",
+            "LTC/USDT:USDT"
         ],
         "pair_blacklist": [
-            "BTC/USDT",
-            "ETH/USDT",
-            "USDC/USDT",
-            "DAI/USDT",
-            "BUSD/USDT"
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "USDC/USDT:USDT",
+            "DAI/USDT:USDT",
+            "BUSD/USDT:USDT"
         ]
     },
     "entry_pricing": {
@@ -105,29 +109,7 @@
     },
     "pairlists": [
         {
-            "method": "VolumePairList",
-            "number_assets": 15,
-            "sort_key": "quoteVolume",
-            "refresh_period": 1800
-        },
-        {
-            "method": "PriceFilter",
-            "max_price": 10
-        },
-        {
-            "method": "AgeFilter",
-            "min_days_listed": 30
-        },
-        {
-            "method": "SpreadFilter",
-            "max_spread_ratio": 0.005
-        },
-        {
-            "method": "VolatilityFilter",
-            "lookback_days": 10,
-            "min_volatility": 0.05,
-            "max_volatility": 0.50,
-            "sort_direction": "asc"
+            "method": "StaticPairList"
         }
     ],
     "risk_manager": {

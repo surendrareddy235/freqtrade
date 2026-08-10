@@ -91,7 +91,9 @@ def test_confirm_trade_entry_veto_active(mock_get_trades, test_config):
     assert row is not None
     assert row[0] == 2  # Tier 2
     assert row[1] == 1  # llm_veto = True
-    assert row[2] == 0  # risk_checks_passed = False
+    import json
+    breakdown = json.loads(row[2])
+    assert breakdown["llm_veto"] is False
     assert row[3] == "llm_veto"
     assert row[4] == "rejected"
 
@@ -148,6 +150,8 @@ def test_confirm_trade_entry_veto_inactive(mock_get_trades, test_config):
     assert row is not None
     assert row[0] == 2  # Tier 2
     assert row[1] == 0  # llm_veto = False
-    assert row[2] == 1  # risk_checks_passed = True
+    import json
+    breakdown = json.loads(row[2])
+    assert all(breakdown.values()) is True
     assert row[3] is None
     assert row[4] == "approved"

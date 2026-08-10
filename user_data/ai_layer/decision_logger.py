@@ -55,7 +55,7 @@ class DecisionLogger:
                     llm_veto INTEGER,
                     llm_confidence REAL,
                     llm_reason TEXT,
-                    risk_checks_passed INTEGER,
+                    risk_checks_passed TEXT,
                     block_reason TEXT,
                     outcome TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
