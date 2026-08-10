@@ -170,7 +170,26 @@ def main():
                 veto_status = "N/A"
 
             # Risk checks passed/failed
-            risk_ok = "Passed" if row['risk_checks_passed'] else "Failed"
+            risk_checks_passed_val = row['risk_checks_passed']
+            all_passed = False
+            if pd.notna(risk_checks_passed_val):
+                val_str = str(risk_checks_passed_val).strip()
+                if val_str in ["1", "1.0", "True", "true"]:
+                    all_passed = True
+                elif val_str in ["0", "0.0", "False", "false"]:
+                    all_passed = False
+                else:
+                    try:
+                        import json
+                        breakdown = json.loads(risk_checks_passed_val)
+                        if isinstance(breakdown, dict):
+                            all_passed = all(breakdown.values())
+                        else:
+                            all_passed = bool(breakdown)
+                    except Exception:
+                        all_passed = bool(risk_checks_passed_val)
+
+            risk_ok = "Passed" if all_passed else "Failed"
 
             # Block reason if blocked
             block_reason_val = row['block_reason'] if pd.notna(row['block_reason']) and row['block_reason'] else "N/A"
@@ -178,7 +197,7 @@ def main():
             # Outcome construction:
             # "Win (+x.xx%)", "Loss (-x.xx%)", "Open", "Blocked"
             # For rows vetoed or blocked, show the reason clearly
-            if not row['risk_checks_passed']:
+            if not all_passed:
                 outcome_str = f"Blocked ({row['block_reason']})" if row['block_reason'] else "Blocked (Risk check failed)"
             elif llm_invoked_val and llm_veto_val:
                 outcome_str = f"Vetoed ({row['llm_reason']})" if row['llm_reason'] else "Vetoed (LLM vetoed)"

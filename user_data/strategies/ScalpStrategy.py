@@ -84,6 +84,49 @@ class ScalpStrategy(IStrategy):
         """
         return float(self.config.get("leverage", 3.0))
 
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                            proposed_stake: float, min_stake: Optional[float], max_stake: float,
+                            entry_tag: Optional[str], side: str, **kwargs) -> float:
+        """
+        Calculate the exact stake amount dynamically based on the Risk Manager's
+        position size percentage of the available balance and leverage.
+        """
+        # Retrieve the wallet balance (available balance)
+        available_balance = None
+        if hasattr(self, "wallets") and self.wallets is not None:
+            try:
+                available_balance = self.wallets.get_free(self.config.get("stake_currency", "USDT"))
+            except Exception:
+                pass
+        if available_balance is None:
+            available_balance = self.config.get("dry_run_wallet", 1000.0)
+
+        # Get the position size percent from RiskManager
+        pos_size_pct = self.risk_manager.position_size_percent  # e.g. 0.01 for 1%
+        leverage_val = float(self.config.get("leverage", 3.0))
+
+        # Under §B.6.4:
+        # "per-trade position sizing — config-driven % of available margin balance per trade...
+        # Must account for margin requirements at the configured leverage (margin required = position size ÷ leverage)"
+        # So: margin required = available_balance * pos_size_pct
+        # Since position size (notional stake amount) = margin required * leverage,
+        # we have: proposed_stake = available_balance * pos_size_pct * leverage_val
+        calculated_stake = available_balance * pos_size_pct * leverage_val
+
+        # Ensure the calculated stake is not less than the exchange's minimum stake (min_notional)
+        # and doesn't exceed max_stake/available_balance
+        if min_stake is not None and calculated_stake < min_stake:
+            calculated_stake = min_stake
+        if max_stake is not None and calculated_stake > max_stake:
+            calculated_stake = max_stake
+
+        logger.info(
+            f"[CustomStake] Sizing for {pair}: available_balance={available_balance:.2f}, "
+            f"pos_size_pct={pos_size_pct:.4f}, leverage={leverage_val}, "
+            f"calculated_stake={calculated_stake:.2f}"
+        )
+        return calculated_stake
+
     def __del__(self):
         try:
             if hasattr(self, "blocked_by_liquidation_distance") and self.blocked_by_liquidation_distance > 0:
@@ -614,7 +657,7 @@ class ScalpStrategy(IStrategy):
 
             # 6. Execute all RiskManager checks sequentially
             # In Phase 6, the LLM veto is fully active and blocks trades if veto is True.
-            passed, reason = self.risk_manager.check_all_rules(
+            passed, reason, breakdown = self.risk_manager.check_all_rules(
                 pair=pair,
                 current_open_trades=self.current_open_trades_count,
                 daily_trades=self.daily_trades_count,
@@ -638,6 +681,7 @@ class ScalpStrategy(IStrategy):
                 self.blocked_by_liquidation_distance += 1
 
             # 7. Record structured decision in SQLite database
+            import json
             decision_data = {
                 "trade_id": None,
                 "pair": pair,
@@ -650,7 +694,7 @@ class ScalpStrategy(IStrategy):
                 "llm_veto": 1 if llm_veto else 0,
                 "llm_confidence": llm_confidence_val,
                 "llm_reason": llm_reason,
-                "risk_checks_passed": 1 if passed else 0,
+                "risk_checks_passed": json.dumps(breakdown),
                 "block_reason": reason if not passed else None,
                 "outcome": "approved" if passed else "rejected"
             }
