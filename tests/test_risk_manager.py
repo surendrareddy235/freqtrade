@@ -192,3 +192,144 @@ def test_risk_manager_check_all_rules_sequential():
     )
     assert not passed
     assert reason == "insufficient_balance"
+
+
+def test_risk_manager_position_sizing_leverage():
+    # position size percent = 10% of 1000 USDT = 100 USDT allowed margin
+    config = {
+        "stoploss": -0.01,
+        "risk_manager": {
+            "position_size_percent": 10.0,
+        }
+    }
+    rm = RiskManager(config)
+
+    # 1. Without leverage: proposed_stake 150 > 100 allowed (fails)
+    passed, reason = rm.check_all_rules(
+        pair="BTC/USDT",
+        current_open_trades=0,
+        daily_trades=0,
+        daily_drawdown_pct=0.0,
+        max_open_trades=3,
+        proposed_stake=150.0,
+        available_balance=1000.0,
+        min_notional=5.0,
+        is_correlated=False,
+        leverage=1.0,
+        open_rate=50000.0
+    )
+    assert not passed
+    assert reason == "position_size_exceeded"
+
+    # 2. With leverage 3x: proposed_stake 150 -> margin 50 <= 100 allowed (passes)
+    passed, reason = rm.check_all_rules(
+        pair="BTC/USDT",
+        current_open_trades=0,
+        daily_trades=0,
+        daily_drawdown_pct=0.0,
+        max_open_trades=3,
+        proposed_stake=150.0,
+        available_balance=1000.0,
+        min_notional=5.0,
+        is_correlated=False,
+        leverage=3.0,
+        open_rate=50000.0
+    )
+    assert passed
+    assert reason == "passed"
+
+
+def test_risk_manager_liquidation_distance_check():
+    # Stoploss = -1% (0.01). 2x stoploss is 2% (0.02)
+    config = {
+        "stoploss": -0.01,
+        "risk_manager": {
+            "position_size_percent": 10.0,  # 10%
+        }
+    }
+    rm = RiskManager(config)
+
+    # 1. Leverage = 3, MMR = 0.05. Safe distance (approx 29.8% from entry) -> passes
+    passed, reason = rm.check_all_rules(
+        pair="BTC/USDT",
+        current_open_trades=0,
+        daily_trades=0,
+        daily_drawdown_pct=0.0,
+        max_open_trades=3,
+        proposed_stake=150.0,
+        available_balance=1000.0,
+        min_notional=5.0,
+        is_correlated=False,
+        leverage=3.0,
+        open_rate=50000.0,
+        mm_ratio=0.05
+    )
+    assert passed
+    assert reason == "passed"
+
+    # 2. Extremely high leverage (e.g. 100x), liquidation distance is too close (< 2% stoploss safety) -> blocked
+    passed, reason = rm.check_all_rules(
+        pair="BTC/USDT",
+        current_open_trades=0,
+        daily_trades=0,
+        daily_drawdown_pct=0.0,
+        max_open_trades=3,
+        proposed_stake=150.0,
+        available_balance=1000.0,
+        min_notional=5.0,
+        is_correlated=False,
+        leverage=100.0,
+        open_rate=50000.0,
+        mm_ratio=0.05
+    )
+    assert not passed
+    assert reason == "liquidation_risk"
+
+
+def test_risk_manager_futures_min_notional_margin():
+    config = {
+        "risk_manager": {
+            "min_balance_buffer": 1.5,
+            "position_size_percent": 100.0,  # Allow 100% position size for min balance check
+        }
+    }
+    rm = RiskManager(config)
+
+    # In live mode (is_dry_run=False), futures minimum viable margin check:
+    # 5 USDT min_notional * 1.5 buffer = 7.5 USDT required min balance
+
+    # 1. Balance = 8.0 USDT >= 7.5 USDT -> passes
+    passed, reason = rm.check_all_rules(
+        pair="BTC/USDT",
+        current_open_trades=0,
+        daily_trades=0,
+        daily_drawdown_pct=0.0,
+        max_open_trades=3,
+        proposed_stake=10.0,
+        available_balance=8.0,
+        min_notional=5.0,
+        is_correlated=False,
+        is_dry_run=False,
+        leverage=3.0,
+        open_rate=50000.0
+    )
+    assert passed
+    assert reason == "passed"
+
+    # 2. Balance = 7.0 USDT < 7.5 USDT -> blocked
+    passed, reason = rm.check_all_rules(
+        pair="BTC/USDT",
+        current_open_trades=0,
+        daily_trades=0,
+        daily_drawdown_pct=0.0,
+        max_open_trades=3,
+        proposed_stake=10.0,
+        available_balance=7.0,
+        min_notional=5.0,
+        is_correlated=False,
+        is_dry_run=False,
+        leverage=3.0,
+        open_rate=50000.0
+    )
+    assert not passed
+    assert reason == "insufficient_balance"
